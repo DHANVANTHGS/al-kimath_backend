@@ -46,12 +46,18 @@ app.use(express.json());
 app.use(bodyparser.urlencoded({ extended: true }));
 
 
-const allowedOrigins = process.env.ALLOWED_ORIGINS
-    ? process.env.ALLOWED_ORIGINS
-          .split(',')
-          .map(origin => origin.trim().replace(/\/$/, ''))
-          .filter(Boolean) : [];
 
+const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || '';
+console.log(rawAllowedOrigins);
+const envAllowedOrigins = rawAllowedOrigins
+    .split(',')
+    .map(origin => origin.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+const allowedOrigins = envAllowedOrigins;
+console.log('Environment Allowed Origins:',allowedOrigins);
+if (!envAllowedOrigins.length) {
+    console.warn('ALLOWED_ORIGINS is not set or empty; using default allowed origins.');
+}
 console.log('Allowed Origins:', allowedOrigins);
 
 app.use(require('cors')({
