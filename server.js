@@ -46,12 +46,11 @@ app.use(express.json());
 app.use(bodyparser.urlencoded({ extended: true }));
 
 
-// const allowedOrigins = process.env.ALLOWED_ORIGINS ? process.env.ALLOWED_ORIGINS.split(','): [];
-const allowedOrigins = [
-    "https://al-hikmath-pvt-ltd.vercel.app/",
-    "http://localhost:5173",
-    "http://localhost:3000",
-];
+const allowedOrigins = process.env.ALLOWED_ORIGINS
+    ? process.env.ALLOWED_ORIGINS
+          .split(',')
+          .map(origin => origin.trim().replace(/\/$/, ''))
+          .filter(Boolean)
 
 app.use(require('cors')({
     origin: function (origin, callback) {
