@@ -50,7 +50,9 @@ const allowedOrigins = process.env.ALLOWED_ORIGINS
     ? process.env.ALLOWED_ORIGINS
           .split(',')
           .map(origin => origin.trim().replace(/\/$/, ''))
-          .filter(Boolean)
+          .filter(Boolean) : [];
+
+console.log('Allowed Origins:', allowedOrigins);
 
 app.use(require('cors')({
     origin: function (origin, callback) {
