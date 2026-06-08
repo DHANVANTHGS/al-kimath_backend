@@ -21,14 +21,17 @@ const product = new mongoose.Schema({
         type: String
     },
     image: {
-        type: String
+        type: Buffer
     },
     images: [
         {
             id: {
                 type: String
             },
-            url: {
+            data: {
+                type: Buffer
+            },
+            contentType: {
                 type: String
             }
         }

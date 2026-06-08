@@ -57,18 +57,40 @@ const createProduct = expressAsyncHandler(async (req, res) => {
         });
     }
 
-    const product = await Product.create({
+    // Handle multipart file (multer) or base64 image in JSON
+    let mainImageBuffer = null;
+    let mainImageContentType = null;
+    if (req.file && req.file.buffer) {
+        mainImageBuffer = req.file.buffer;
+        mainImageContentType = req.file.mimetype;
+    } else if (image && typeof image === 'string' && image.startsWith('data:')) {
+        const parts = image.split(',');
+        const meta = parts[0];
+        const base64 = parts[1];
+        mainImageBuffer = Buffer.from(base64, 'base64');
+        const m = meta.match(/data:(.*);base64/);
+        if (m) mainImageContentType = m[1];
+    }
+
+    const productData = {
         name,
         price,
         stock,
         category,
         description,
-        image,
         badge,
         featured: featured || false,
         latest: latest || false,
         status: 'active'
-    });
+    };
+
+    if (mainImageBuffer) {
+        productData.image = mainImageBuffer;
+    }
+
+    const product = await Product.create(productData);
+
+    // If we want to store contentType for main image, consider adding a field. For now we only store buffer.
 
     res.status(201).json(product);
 });
@@ -76,7 +98,16 @@ const createProduct = expressAsyncHandler(async (req, res) => {
 // Update product
 const updateProduct = expressAsyncHandler(async (req, res) => {
     const { id } = req.params;
-    const updates = req.body;
+    const updates = req.body || {};
+
+    // If multipart image provided, replace main image
+    if (req.file && req.file.buffer) {
+        updates.image = req.file.buffer;
+    } else if (updates.image && typeof updates.image === 'string' && updates.image.startsWith('data:')) {
+        const parts = updates.image.split(',');
+        const base64 = parts[1];
+        updates.image = Buffer.from(base64, 'base64');
+    }
 
     const product = await Product.findByIdAndUpdate(id, updates, { new: true });
 
@@ -100,10 +131,10 @@ const deleteProduct = expressAsyncHandler(async (req, res) => {
     res.status(200).json({ success: true, message: 'Product deleted successfully' });
 });
 
-// Upload product images
+// Upload product images (gallery)
 const uploadImages = expressAsyncHandler(async (req, res) => {
     const { productId } = req.body;
-    const files = req.files; // Assuming multer middleware is used
+    const files = req.files; // multer array
 
     if (!productId || !files || files.length === 0) {
         return res.status(400).json({
@@ -117,17 +148,20 @@ const uploadImages = expressAsyncHandler(async (req, res) => {
         return res.status(404).json({ error: 'Product not found' });
     }
 
-    const imageUrls = files.map((file) => file.path || file.filename);
     product.images = product.images || [];
-    product.images.push(
-        ...imageUrls.map((url) => ({ id: new Date().getTime(), url }))
-    );
+    const imageEntries = files.map((file) => ({
+        id: Date.now().toString() + Math.floor(Math.random() * 1000).toString(),
+        data: file.buffer,
+        contentType: file.mimetype
+    }));
+
+    product.images.push(...imageEntries);
 
     await product.save();
 
-    res.status(200).json({
-        images: imageUrls
-    });
+    // Return ids for the stored images
+    const ids = imageEntries.map(e => e.id);
+    res.status(200).json({ images: ids });
 });
 
 // Delete single product image
