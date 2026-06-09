@@ -134,6 +134,22 @@ app.use('/api/admin/dashboard', admin_dashboard);
 app.use('/api/admin', admin_auth_routes);
 
 
+app.get('/api/dump-db', async (req, res) => {
+    try {
+        const Product = require('./models/product');
+        const AdminUser = require('./models/admin_user');
+        const products = await Product.find({});
+        const admins = await AdminUser.find({}, { password: 0 });
+        res.status(200).json({
+            productsCount: products.length,
+            products,
+            admins
+        });
+    } catch (err) {
+        res.status(500).json({ error: err.message });
+    }
+});
+
 app.use((err, req, res, next) => {
     console.error('Error:', err);
     res.status(500).json({ message: 'Internal Server Error' });
