@@ -85,7 +85,7 @@ const updateOrderStatus = expressAsyncHandler(async (req, res) => {
         return res.status(400).json({ error: 'Invalid status', validStatuses });
     }
 
-    const order = await Order.findByIdAndUpdate(id, { status }, { new: true });
+    const order = await Order.findByIdAndUpdate(id, { status }, { returnDocument: 'after' });
 
     if (!order) {
         return res.status(404).json({ error: 'Order not found' });
@@ -99,7 +99,7 @@ const updateOrder = expressAsyncHandler(async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    const order = await Order.findByIdAndUpdate(id, updates, { new: true });
+    const order = await Order.findByIdAndUpdate(id, updates, { returnDocument: 'after' });
 
     if (!order) {
         return res.status(404).json({ error: 'Order not found' });

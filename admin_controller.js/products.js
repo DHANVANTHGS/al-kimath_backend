@@ -189,7 +189,7 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
         updates.images = buildImageArray(updates.images);
     }
 
-    const product = await Product.findByIdAndUpdate(id, updates, { new: true });
+    const product = await Product.findByIdAndUpdate(id, updates, { returnDocument: 'after' });
 
     if (!product) {
         return res.status(404).json({ error: 'Product not found' });

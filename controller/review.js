@@ -166,7 +166,7 @@ const markHelpful = expressAsyncHandler(async (req, res) => {
     const review = await Review.findByIdAndUpdate(
         id,
         { $inc: { helpful: 1 } },
-        { new: true }
+        { returnDocument: 'after' }
     );
 
     if (!review) {

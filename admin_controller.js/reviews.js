@@ -60,7 +60,7 @@ const updateReview = expressAsyncHandler(async (req, res) => {
     if (status) updates.status = status;
     if (comment) updates.comment = comment;
 
-    const review = await Review.findByIdAndUpdate(id, updates, { new: true });
+    const review = await Review.findByIdAndUpdate(id, updates, { returnDocument: 'after' });
 
     if (!review) {
         return res.status(404).json({ error: 'Review not found' });

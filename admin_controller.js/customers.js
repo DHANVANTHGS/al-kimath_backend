@@ -79,7 +79,7 @@ const updateCustomer = expressAsyncHandler(async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    const customer = await Customer.findByIdAndUpdate(id, updates, { new: true });
+    const customer = await Customer.findByIdAndUpdate(id, updates, { returnDocument: 'after' });
 
     if (!customer) {
         return res.status(404).json({ error: 'Customer not found' });

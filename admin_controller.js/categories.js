@@ -53,7 +53,7 @@ const updateCategory = expressAsyncHandler(async (req, res) => {
     const { id } = req.params;
     const updates = req.body;
 
-    const category = await Category.findByIdAndUpdate(id, updates, { new: true });
+    const category = await Category.findByIdAndUpdate(id, updates, { returnDocument: 'after' });
 
     if (!category) {
         return res.status(404).json({ error: 'Category not found' });
