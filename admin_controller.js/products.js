@@ -97,6 +97,7 @@ const createProduct = expressAsyncHandler(async (req, res) => {
 
 // Update product
 const updateProduct = expressAsyncHandler(async (req, res) => {
+    console.log('received body :', req.body);
     const { id } = req.params;
     const updates = req.body || {};
 
