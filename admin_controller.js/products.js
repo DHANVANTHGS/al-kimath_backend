@@ -188,6 +188,11 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
     const { id } = req.params;
     const updates = req.body || {};
 
+    const existingProduct = await Product.findById(id);
+    if (!existingProduct) {
+        return res.status(404).json({ error: 'Product not found' });
+    }
+
     if ('isFeatured' in updates) {
         updates.featured = updates.isFeatured;
         delete updates.isFeatured;
@@ -202,7 +207,31 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
     }
 
     if (Array.isArray(updates.images)) {
-        updates.images = buildImageArray(updates.images);
+        const newImages = [];
+        for (const entry of updates.images) {
+            if (!entry) continue;
+            // Case 1: Existing image (represented as object with id/url)
+            if (entry.id && !entry.data && !entry.buffer && typeof entry === 'object') {
+                const existingImg = (existingProduct.images || []).find(img => img.id === entry.id);
+                if (existingImg) {
+                    newImages.push(existingImg);
+                }
+            } else {
+                // Case 2: New base64 or buffer image
+                const built = buildImageEntry(entry);
+                if (built) {
+                    newImages.push(built);
+                }
+            }
+        }
+        updates.images = newImages;
+
+        // Sync cover image with first image in gallery
+        if (newImages.length > 0) {
+            updates.image = newImages[0].data;
+        } else {
+            updates.image = null;
+        }
     }
 
     const product = await Product.findByIdAndUpdate(id, updates, { returnDocument: 'after' });
@@ -252,6 +281,11 @@ const uploadImages = expressAsyncHandler(async (req, res) => {
     }));
 
     product.images.push(...imageEntries);
+
+    // If main image is not set, set it to the first uploaded gallery image
+    if (!product.image && imageEntries.length > 0) {
+        product.image = imageEntries[0].data;
+    }
 
     await product.save();
 
