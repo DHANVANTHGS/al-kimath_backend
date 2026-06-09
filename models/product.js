@@ -20,6 +20,21 @@ const product = new mongoose.Schema({
     description: {
         type: String
     },
+    originalPrice: {
+        type: Number
+    },
+    brand: {
+        type: String
+    },
+    tags: [
+        {
+            type: String
+        }
+    ],
+    specifications: {
+        type: Object,
+        default: {}
+    },
     image: {
         type: Buffer
     },

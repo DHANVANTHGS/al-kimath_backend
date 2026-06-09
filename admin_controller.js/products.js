@@ -1,6 +1,51 @@
 const Product = require('../models/product');
 const expressAsyncHandler = require('express-async-handler');
 
+const parseBase64Image = (value) => {
+    const parts = value.split(',');
+    const meta = parts[0];
+    const base64 = parts[1] || '';
+    const buffer = Buffer.from(base64, 'base64');
+    const m = meta.match(/data:(.*);base64/);
+    return {
+        data: buffer,
+        contentType: m ? m[1] : 'application/octet-stream'
+    };
+};
+
+const buildImageEntry = (entry) => {
+    if (!entry) return null;
+    if (typeof entry === 'string' && entry.startsWith('data:')) {
+        const { data, contentType } = parseBase64Image(entry);
+        return {
+            id: Date.now().toString() + Math.floor(Math.random() * 1000).toString(),
+            data,
+            contentType
+        };
+    }
+    if (entry.buffer && entry.mimetype) {
+        return {
+            id: Date.now().toString() + Math.floor(Math.random() * 1000).toString(),
+            data: entry.buffer,
+            contentType: entry.mimetype
+        };
+    }
+    if (entry.data && entry.contentType) {
+        const data = Buffer.isBuffer(entry.data) ? entry.data : Buffer.from(entry.data, 'base64');
+        return {
+            id: entry.id || Date.now().toString() + Math.floor(Math.random() * 1000).toString(),
+            data,
+            contentType: entry.contentType
+        };
+    }
+    return null;
+};
+
+const buildImageArray = (images) => {
+    if (!Array.isArray(images)) return [];
+    return images.map(buildImageEntry).filter(Boolean);
+};
+
 // Get all products with optional filters
 const getProducts = expressAsyncHandler(async (req, res) => {
     const { category, search, status, page = 1, limit = 10 } = req.query;
@@ -48,7 +93,24 @@ const getProduct = expressAsyncHandler(async (req, res) => {
 
 // Create new product
 const createProduct = expressAsyncHandler(async (req, res) => {
-    const { name, price, stock, category, description, image, badge, featured, latest } = req.body;
+    const {
+        name,
+        price,
+        stock,
+        category,
+        description,
+        image,
+        images,
+        badge,
+        featured,
+        latest,
+        originalPrice,
+        brand,
+        tags,
+        specifications,
+        status,
+        isFeatured
+    } = req.body;
 
     if (!name || !price || !stock || !category) {
         return res.status(400).json({
@@ -64,12 +126,13 @@ const createProduct = expressAsyncHandler(async (req, res) => {
         mainImageBuffer = req.file.buffer;
         mainImageContentType = req.file.mimetype;
     } else if (image && typeof image === 'string' && image.startsWith('data:')) {
-        const parts = image.split(',');
-        const meta = parts[0];
-        const base64 = parts[1];
-        mainImageBuffer = Buffer.from(base64, 'base64');
-        const m = meta.match(/data:(.*);base64/);
-        if (m) mainImageContentType = m[1];
+        const parsed = parseBase64Image(image);
+        mainImageBuffer = parsed.data;
+        mainImageContentType = parsed.contentType;
+    } else if (Array.isArray(images) && images.length > 0 && typeof images[0] === 'string' && images[0].startsWith('data:')) {
+        const parsed = parseBase64Image(images[0]);
+        mainImageBuffer = parsed.data;
+        mainImageContentType = parsed.contentType;
     }
 
     const productData = {
@@ -79,13 +142,21 @@ const createProduct = expressAsyncHandler(async (req, res) => {
         category,
         description,
         badge,
-        featured: featured || false,
+        featured: featured ?? isFeatured ?? false,
         latest: latest || false,
-        status: 'active'
+        originalPrice,
+        brand,
+        tags,
+        specifications: specifications || {},
+        status: status || 'active'
     };
 
     if (mainImageBuffer) {
         productData.image = mainImageBuffer;
+    }
+
+    if (Array.isArray(images) && images.length) {
+        productData.images = buildImageArray(images);
     }
 
     const product = await Product.create(productData);
@@ -101,13 +172,21 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
     const { id } = req.params;
     const updates = req.body || {};
 
+    if ('isFeatured' in updates) {
+        updates.featured = updates.isFeatured;
+        delete updates.isFeatured;
+    }
+
     // If multipart image provided, replace main image
     if (req.file && req.file.buffer) {
         updates.image = req.file.buffer;
     } else if (updates.image && typeof updates.image === 'string' && updates.image.startsWith('data:')) {
-        const parts = updates.image.split(',');
-        const base64 = parts[1];
-        updates.image = Buffer.from(base64, 'base64');
+        const parsed = parseBase64Image(updates.image);
+        updates.image = parsed.data;
+    }
+
+    if (Array.isArray(updates.images)) {
+        updates.images = buildImageArray(updates.images);
     }
 
     const product = await Product.findByIdAndUpdate(id, updates, { new: true });
