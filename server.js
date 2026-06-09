@@ -29,7 +29,12 @@ const port = process.env.PORT;
 
 app.set('trust proxy', 1);
 
-connectDB();
+const path = require('path');
+
+connectDB().then(() => {
+    const seedAdmins = require('./seed-helper');
+    seedAdmins();
+});
 
 app.use(helmet({
     contentSecurityPolicy: false,
@@ -44,6 +49,7 @@ app.use(helmet({
 }));
 app.use(express.json({ limit: '50mb' }));
 app.use(bodyparser.urlencoded({ extended: true, limit: '50mb' }));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 
 

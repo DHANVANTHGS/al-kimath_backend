@@ -46,6 +46,22 @@ const buildImageArray = (images) => {
     return images.map(buildImageEntry).filter(Boolean);
 };
 
+const mapAdminProduct = (p) => {
+    if (!p) return null;
+    const obj = p.toObject ? p.toObject() : p;
+    if (obj.image) {
+        obj.imageUrl = `/api/product/${obj._id}/image`;
+        delete obj.image;
+    }
+    if (obj.images && Array.isArray(obj.images)) {
+        obj.images = obj.images.map(img => ({ 
+            id: img.id, 
+            url: `/api/product/${obj._id}/image/${img.id}` 
+        }));
+    }
+    return obj;
+};
+
 // Get all products with optional filters
 const getProducts = expressAsyncHandler(async (req, res) => {
     const { category, search, status, page = 1, limit = 10 } = req.query;
@@ -72,7 +88,7 @@ const getProducts = expressAsyncHandler(async (req, res) => {
     const pages = Math.ceil(total / limitNum);
 
     res.status(200).json({
-        products,
+        products: (products || []).map(mapAdminProduct),
         total,
         pages,
         currentPage: pageNum
@@ -88,7 +104,7 @@ const getProduct = expressAsyncHandler(async (req, res) => {
         return res.status(404).json({ error: 'Product not found' });
     }
 
-    res.status(200).json(product);
+    res.status(200).json(mapAdminProduct(product));
 });
 
 // Create new product
@@ -163,7 +179,7 @@ const createProduct = expressAsyncHandler(async (req, res) => {
 
     // If we want to store contentType for main image, consider adding a field. For now we only store buffer.
 
-    res.status(201).json(product);
+    res.status(201).json(mapAdminProduct(product));
 });
 
 // Update product
@@ -195,7 +211,7 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
         return res.status(404).json({ error: 'Product not found' });
     }
 
-    res.status(200).json(product);
+    res.status(200).json(mapAdminProduct(product));
 });
 
 // Delete product
