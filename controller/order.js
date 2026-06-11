@@ -43,12 +43,24 @@ const createOrder = expressAsyncHandler(async (req, res) => {
         await payment.save();
     }
 
+    const mongoose = require('mongoose');
+    const validProducts = [];
+    if (Array.isArray(products)) {
+        for (const p of products) {
+            if (mongoose.Types.ObjectId.isValid(p.productId)) {
+                validProducts.push(p);
+            } else {
+                console.warn(`Skipping invalid productId: ${p.productId}`);
+            }
+        }
+    }
+
     const createdOrder = await Order.create({
         id: orderId || generateOrderId(),
-        customerId: customerId || req.user?.id,
+        customerId: mongoose.Types.ObjectId.isValid(customerId) ? customerId : (req.user?.id || undefined),
         customerName,
         customerEmail,
-        products,
+        products: validProducts,
         total,
         paymentId: payment?.paymentId,
         paymentSessionId: paymentSessionId || undefined,
