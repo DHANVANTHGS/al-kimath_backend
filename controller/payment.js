@@ -60,16 +60,37 @@ const processPayment = expressAsyncHandler(async (req, res) => {
 const verifyPayment = expressAsyncHandler(async (req, res) => {
     const { orderId, paymentSessionId } = req.body;
 
-    if (!orderId || !paymentSessionId) {
+    if (!orderId) {
         return res.status(400).json({
             error: 'Invalid request parameters',
-            details: 'orderId and paymentSessionId are required'
+            details: 'orderId is required'
         });
     }
 
-    const payment = await Payment.findOne({ merchantOrderId: orderId, paymentSessionId });
+    const isPlaceholderSessionId = (sessionId) => {
+        return typeof sessionId === 'string' && /^(?:\{?payment[_-]?session[_-]?id\}?|\{paymentSessionId\})$/i.test(sessionId.trim());
+    };
+
+    let payment = null;
+    const placeholderSessionId = isPlaceholderSessionId(paymentSessionId);
+
+    if (paymentSessionId && !placeholderSessionId) {
+        payment = await Payment.findOne({ merchantOrderId: orderId, paymentSessionId });
+    }
+
+    if (!payment) {
+        payment = await Payment.findOne({ merchantOrderId: orderId });
+    }
+
     if (!payment) {
         return res.status(404).json({ error: 'Payment record not found' });
+    }
+
+    if (paymentSessionId && !placeholderSessionId && payment.paymentSessionId !== paymentSessionId) {
+        return res.status(400).json({
+            error: 'Payment session mismatch',
+            details: 'Provided paymentSessionId does not match the stored session for this order'
+        });
     }
 
     if (payment.status !== 'created') {
