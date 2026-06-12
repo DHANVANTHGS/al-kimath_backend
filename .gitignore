@@ -4,3 +4,5 @@ logs
 *.log
 dist
 seed-users.js
+Admin_Endpoints.md
+NON_ADMIN_Endpoints.md
