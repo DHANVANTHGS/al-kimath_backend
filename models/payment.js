@@ -20,6 +20,11 @@ const paymentSchema = new mongoose.Schema({
         required: true,
         unique: true
     },
+    cashfreePaymentSessionId: {
+        type: String,
+        unique: true,
+        sparse: true
+    },
     amount: {
         type: Number,
         required: true

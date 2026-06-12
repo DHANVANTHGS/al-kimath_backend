@@ -6,8 +6,108 @@ const generateUniqueId = (prefix) => `${prefix}-${Date.now()}-${Math.floor(Math.
 const generateSessionId = () => `CFS-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
 const generateCashfreeOrderId = () => `CFORD-${Date.now()}-${Math.floor(Math.random() * 9000) + 1000}`;
 
+const getCashfreeApiBaseUrl = () => {
+    const env = (process.env.CASHFREE_ENV || 'production').trim().toLowerCase();
+    return env === 'test' || env === 'sandbox'
+        ? 'https://test.cashfree.com'
+        : 'https://api.cashfree.com';
+};
+
+const getCashfreeCredentials = () => {
+    const appId = process.env.CASHFREE_APP_ID;
+    const appSecret = process.env.CASHFREE_SECRET_KEY || process.env.CASHFREE_APP_SECRET;
+    return { appId, appSecret };
+};
+
+const createCashfreeOrder = async ({ orderId, amount, email, phone, customerName, productInfo, customerId }) => {
+    const { appId, appSecret } = getCashfreeCredentials();
+    const baseUrl = getCashfreeApiBaseUrl();
+
+    if (!appId || !appSecret) {
+        throw new Error('Missing Cashfree credentials');
+    }
+
+    const returnUrl = `${process.env.FRONTEND_URL || 'https://alhikmath.com'}/order-confirmation?orderId=${encodeURIComponent(orderId)}&session_id={payment_session_id}`;
+    const notifyUrl = `${process.env.BACKEND_URL || 'https://al-kimath-backend.onrender.com'}/api/payment/webhook`;
+
+    const payload = {
+        order_id: orderId,
+        order_amount: amount,
+        order_currency: 'INR',
+        customer_details: {
+            customer_id: customerId || `cust_${Date.now()}`,
+            customer_email: email,
+            customer_phone: phone,
+            customer_name: customerName
+        },
+        order_meta: {
+            return_url: returnUrl,
+            notify_url: notifyUrl
+        },
+        order_note: typeof productInfo === 'string' ? productInfo : JSON.stringify(productInfo)
+    };
+
+    const response = await fetch(`${baseUrl}/pg/orders`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-client-id': appId,
+            'x-client-secret': appSecret
+        },
+        body: JSON.stringify(payload)
+    });
+
+    const responseBody = await response.json();
+    if (!response.ok) {
+        const error = new Error(`Cashfree order creation failed: ${response.status}`);
+        error.details = responseBody;
+        throw error;
+    }
+
+    return responseBody;
+};
+
+const createCashfreeCheckoutSession = async ({ orderId, amount, currency, customer_details, payment_session_id }) => {
+    const { appId, appSecret } = getCashfreeCredentials();
+    const baseUrl = getCashfreeApiBaseUrl();
+
+    if (!appId || !appSecret) {
+        throw new Error('Missing Cashfree credentials');
+    }
+
+    const payload = {
+        payment_session_id,
+        order_id: orderId,
+        order_amount: amount,
+        order_currency: currency,
+        customer_details,
+        order_meta: {
+            return_url: `${process.env.FRONTEND_URL || 'https://alhikmath.com'}/order-confirmation?orderId=${encodeURIComponent(orderId)}&session_id={payment_session_id}`
+        }
+    };
+
+    const response = await fetch(`${baseUrl}/pg/view/sessions/checkout`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'x-client-id': appId,
+            'x-client-secret': appSecret
+        },
+        body: JSON.stringify(payload)
+    });
+
+    const responseBody = await response.json();
+    if (!response.ok) {
+        const error = new Error(`Cashfree checkout session creation failed: ${response.status}`);
+        error.details = responseBody;
+        throw error;
+    }
+
+    return responseBody;
+};
+
 const processPayment = expressAsyncHandler(async (req, res) => {
-    const { orderId, amount, email, phone, customerName, productInfo } = req.body;
+    const { orderId, amount, email, phone, customerName, productInfo, customerId } = req.body;
 
     if (!orderId || !amount || !email || !phone || !customerName || !productInfo) {
         return res.status(400).json({
@@ -23,6 +123,7 @@ const processPayment = expressAsyncHandler(async (req, res) => {
                 message: 'Payment session already created',
                 paymentSessionId: existingPayment.paymentSessionId,
                 cashfreeOrderId: existingPayment.cashfreeOrderId,
+                cashfreePaymentSessionId: existingPayment.cashfreePaymentSessionId,
                 paymentId: existingPayment.paymentId,
                 status: existingPayment.status
             });
@@ -34,11 +135,22 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         });
     }
 
+    const cashfreeResponse = await createCashfreeOrder({
+        orderId,
+        amount,
+        email,
+        phone,
+        customerName,
+        productInfo,
+        customerId
+    });
+
     const payment = await Payment.create({
         paymentId: generateUniqueId('PAY'),
         merchantOrderId: orderId,
         paymentSessionId: generateSessionId(),
-        cashfreeOrderId: generateCashfreeOrderId(),
+        cashfreeOrderId: cashfreeResponse.cf_order_id || cashfreeResponse.order_id || generateCashfreeOrderId(),
+        cashfreePaymentSessionId: cashfreeResponse.payment_session_id || null,
         amount,
         email,
         phone,
@@ -50,6 +162,7 @@ const processPayment = expressAsyncHandler(async (req, res) => {
     return res.status(201).json({
         paymentSessionId: payment.paymentSessionId,
         cashfreeOrderId: payment.cashfreeOrderId,
+        cashfreePaymentSessionId: payment.cashfreePaymentSessionId,
         paymentId: payment.paymentId,
         merchantOrderId: payment.merchantOrderId,
         amount: payment.amount,
@@ -116,6 +229,50 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
     });
 });
 
+const createCheckoutSession = expressAsyncHandler(async (req, res) => {
+    const { orderId } = req.body;
+
+    if (!orderId) {
+        return res.status(400).json({
+            error: 'Invalid request parameters',
+            details: 'orderId is required'
+        });
+    }
+
+    const payment = await Payment.findOne({ merchantOrderId: orderId });
+    if (!payment) {
+        return res.status(404).json({ error: 'Payment record not found' });
+    }
+
+    if (!payment.cashfreePaymentSessionId) {
+        return res.status(400).json({
+            error: 'Cashfree payment session is not available',
+            details: 'Create the payment order first via /api/payment/process'
+        });
+    }
+
+    const customer_details = {
+        customer_id: payment.email || `cust_${Date.now()}`,
+        customer_email: payment.email,
+        customer_phone: payment.phone,
+        customer_name: payment.customerName
+    };
+
+    const checkoutResponse = await createCashfreeCheckoutSession({
+        orderId: payment.merchantOrderId,
+        amount: payment.amount,
+        currency: payment.currency,
+        customer_details,
+        payment_session_id: payment.cashfreePaymentSessionId
+    });
+
+    return res.status(200).json({
+        checkoutResponse,
+        cashfreePaymentSessionId: payment.cashfreePaymentSessionId,
+        cashfreeOrderId: payment.cashfreeOrderId
+    });
+});
+
 const verifyWebhook = expressAsyncHandler(async (req, res) => {
     const signature = req.headers['x-cashfree-signature'] || req.headers['x-signature'];
     const secret = process.env.CASHFREE_WEBHOOK_SECRET || '';
@@ -163,6 +320,7 @@ const verifyWebhook = expressAsyncHandler(async (req, res) => {
 
 module.exports = {
     processPayment,
+    createCheckoutSession,
     verifyPayment,
     verifyWebhook
 };
