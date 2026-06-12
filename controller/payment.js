@@ -106,7 +106,11 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         });
     } catch (err) {
         console.error("Payment session creation failed:", err);
-        return res.status(500).json({ error: 'Internal server error during payment processing' });
+        return res.status(500).json({ 
+            error: 'Internal server error during payment processing',
+            details: err.message,
+            stack: err.stack
+        });
     }
 });
 
@@ -210,7 +214,11 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
         });
     } catch (err) {
         console.error("Verification failed:", err);
-        return res.status(500).json({ error: 'Internal server error during payment verification' });
+        return res.status(500).json({ 
+            error: 'Internal server error during payment verification',
+            details: err.message,
+            stack: err.stack
+        });
     }
 });
 
