@@ -60,46 +60,22 @@ const processPayment = expressAsyncHandler(async (req, res) => {
 const verifyPayment = expressAsyncHandler(async (req, res) => {
     const { orderId, paymentSessionId } = req.body;
 
-    if (!orderId) {
+    if (!orderId || !paymentSessionId) {
         return res.status(400).json({
             error: 'Invalid request parameters',
-            details: 'orderId is required'
+            details: 'orderId and paymentSessionId are required'
         });
     }
 
-    const isPlaceholderSessionId = typeof paymentSessionId === 'string' && paymentSessionId.trim().toLowerCase() === '{payment_session_id}';
-    const query = isPlaceholderSessionId || !paymentSessionId
-        ? { merchantOrderId: orderId }
-        : { merchantOrderId: orderId, paymentSessionId };
-
-    const payment = await Payment.findOne(query);
+    const payment = await Payment.findOne({ merchantOrderId: orderId, paymentSessionId });
     if (!payment) {
-        return res.status(404).json({
-            error: 'Payment record not found',
-            details: 'Check the orderId and paymentSessionId; the placeholder {payment_session_id} must be replaced with the real session id before verify.'
-        });
-    }
-
-    if (payment.status === 'paided') {
-        return res.status(200).json({
-            paymentId: payment.paymentId,
-            paymentSessionId: payment.paymentSessionId,
-            cashfreeOrderId: payment.cashfreeOrderId,
-            status: payment.status
-        });
+        return res.status(404).json({ error: 'Payment record not found' });
     }
 
     if (payment.status !== 'created') {
         return res.status(400).json({
             error: 'Payment session cannot be verified',
             status: payment.status
-        });
-    }
-
-    if (isPlaceholderSessionId || !paymentSessionId) {
-        return res.status(400).json({
-            error: 'Payment session pending verification',
-            details: 'A real paymentSessionId is required for API verification. If you are using Cashfree return_url, wait for the redirect to include the actual session id value.'
         });
     }
 

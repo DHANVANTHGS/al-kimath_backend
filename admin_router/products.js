@@ -12,8 +12,8 @@ Router.post('/', adminmiddleware, upload.single('image'), createProduct);
 // Accept single image file for update
 Router.put('/:id', adminmiddleware, upload.single('image'), updateProduct);
 Router.delete('/:id', adminmiddleware, deleteProduct);
-// Accept multiple files for gallery images (field name: images)
-Router.post('/upload-images', adminmiddleware, upload.array('images'), uploadImages);
+// Accept multiple files for gallery images (field name: images/files)
+Router.post('/upload-images', adminmiddleware, upload.any(), uploadImages);
 Router.delete('/:productId/image/:imageId', adminmiddleware, deleteImage);
 
 module.exports = Router;

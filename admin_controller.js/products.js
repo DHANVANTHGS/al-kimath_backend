@@ -46,6 +46,22 @@ const buildImageArray = (images) => {
     return images.map(buildImageEntry).filter(Boolean);
 };
 
+const mapAdminProduct = (p) => {
+    if (!p) return null;
+    const obj = p.toObject ? p.toObject() : p;
+    if (obj.image) {
+        obj.imageUrl = `/api/product/${obj._id}/image`;
+        delete obj.image;
+    }
+    if (obj.images && Array.isArray(obj.images)) {
+        obj.images = obj.images.map(img => ({ 
+            id: img.id, 
+            url: `/api/product/${obj._id}/image/${img.id}` 
+        }));
+    }
+    return obj;
+};
+
 // Get all products with optional filters
 const getProducts = expressAsyncHandler(async (req, res) => {
     const { category, search, status, page = 1, limit = 10 } = req.query;
@@ -72,7 +88,7 @@ const getProducts = expressAsyncHandler(async (req, res) => {
     const pages = Math.ceil(total / limitNum);
 
     res.status(200).json({
-        products,
+        products: (products || []).map(mapAdminProduct),
         total,
         pages,
         currentPage: pageNum
@@ -88,7 +104,7 @@ const getProduct = expressAsyncHandler(async (req, res) => {
         return res.status(404).json({ error: 'Product not found' });
     }
 
-    res.status(200).json(product);
+    res.status(200).json(mapAdminProduct(product));
 });
 
 // Create new product
@@ -163,7 +179,7 @@ const createProduct = expressAsyncHandler(async (req, res) => {
 
     // If we want to store contentType for main image, consider adding a field. For now we only store buffer.
 
-    res.status(201).json(product);
+    res.status(201).json(mapAdminProduct(product));
 });
 
 // Update product
@@ -171,6 +187,11 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
     console.log('received body :', req.body);
     const { id } = req.params;
     const updates = req.body || {};
+
+    const existingProduct = await Product.findById(id);
+    if (!existingProduct) {
+        return res.status(404).json({ error: 'Product not found' });
+    }
 
     if ('isFeatured' in updates) {
         updates.featured = updates.isFeatured;
@@ -186,7 +207,31 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
     }
 
     if (Array.isArray(updates.images)) {
-        updates.images = buildImageArray(updates.images);
+        const newImages = [];
+        for (const entry of updates.images) {
+            if (!entry) continue;
+            // Case 1: Existing image (represented as object with id/url)
+            if (entry.id && !entry.data && !entry.buffer && typeof entry === 'object') {
+                const existingImg = (existingProduct.images || []).find(img => img.id === entry.id);
+                if (existingImg) {
+                    newImages.push(existingImg);
+                }
+            } else {
+                // Case 2: New base64 or buffer image
+                const built = buildImageEntry(entry);
+                if (built) {
+                    newImages.push(built);
+                }
+            }
+        }
+        updates.images = newImages;
+
+        // Sync cover image with first image in gallery
+        if (newImages.length > 0) {
+            updates.image = newImages[0].data;
+        } else {
+            updates.image = null;
+        }
     }
 
     const product = await Product.findByIdAndUpdate(id, updates, { returnDocument: 'after' });
@@ -195,7 +240,7 @@ const updateProduct = expressAsyncHandler(async (req, res) => {
         return res.status(404).json({ error: 'Product not found' });
     }
 
-    res.status(200).json(product);
+    res.status(200).json(mapAdminProduct(product));
 });
 
 // Delete product
@@ -236,6 +281,11 @@ const uploadImages = expressAsyncHandler(async (req, res) => {
     }));
 
     product.images.push(...imageEntries);
+
+    // If main image is not set, set it to the first uploaded gallery image
+    if (!product.image && imageEntries.length > 0) {
+        product.image = imageEntries[0].data;
+    }
 
     await product.save();
 
