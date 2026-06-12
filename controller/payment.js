@@ -8,9 +8,11 @@ const generateCashfreeOrderId = () => `CFORD-${Date.now()}-${Math.floor(Math.ran
 
 const getCashfreeApiBaseUrl = () => {
     const env = (process.env.CASHFREE_ENV || 'production').trim().toLowerCase();
-    return env === 'test' || env === 'sandbox'
-        ? 'https://test.cashfree.com'
-        : 'https://api.cashfree.com';
+    // base URL now includes the /pg segment to simplify endpoint composition
+    if (env === 'test' || env === 'sandbox') {
+        return 'https://sandbox.cashfree.com/pg';
+    }
+    return 'https://api.cashfree.com/pg';
 };
 
 const getCashfreeCredentials = () => {
@@ -27,8 +29,17 @@ const createCashfreeOrder = async ({ orderId, amount, email, phone, customerName
         throw new Error('Missing Cashfree credentials');
     }
 
-    const returnUrl = `${process.env.FRONTEND_URL || 'https://alhikmath.com'}/order-confirmation?orderId=${encodeURIComponent(orderId)}&session_id={payment_session_id}`;
-    const notifyUrl = `${process.env.BACKEND_URL || 'https://al-kimath-backend.onrender.com'}/api/payment/webhook`;
+    const frontendUrl = (process.env.FRONTEND_URL || 'https://alhikmath.com').replace(/\/$/, '');
+    const backendUrl = (process.env.BACKEND_URL || 'https://al-kimath-backend.onrender.com').replace(/\/$/, '');
+
+    // Enforce HTTPS for production environment
+    if (((process.env.CASHFREE_ENV || 'production').trim().toLowerCase() === 'production') && !/^https:\/\//i.test(frontendUrl)) {
+        console.error('[CASHFREE] FRONTEND_URL must be HTTPS in production:', frontendUrl);
+        throw new Error('Invalid FRONTEND_URL for production');
+    }
+
+    const returnUrl = `${frontendUrl}/order-confirmation?orderId={order_id}&session_id={payment_session_id}`;
+    const notifyUrl = `${backendUrl}/api/payment/webhook`;
 
     const payload = {
         order_id: orderId,
@@ -47,12 +58,15 @@ const createCashfreeOrder = async ({ orderId, amount, email, phone, customerName
         order_note: typeof productInfo === 'string' ? productInfo : JSON.stringify(productInfo)
     };
 
-    const response = await fetch(`${baseUrl}/pg/orders`, {
+    const url = `${baseUrl}/orders`;
+    console.log({ url, appId: appId ? 'PRESENT' : 'MISSING', appSecret: appSecret ? 'PRESENT' : 'MISSING', apiVersion: '2023-08-01' });
+    const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'x-client-id': appId,
-            'x-client-secret': appSecret
+            'x-client-secret': appSecret,
+            'x-api-version': '2023-08-01'
         },
         body: JSON.stringify(payload)
     });
@@ -86,12 +100,15 @@ const createCashfreeCheckoutSession = async ({ orderId, amount, currency, custom
         }
     };
 
-    const response = await fetch(`${baseUrl}/pg/view/sessions/checkout`, {
+    const url = `${baseUrl}/view/sessions/checkout`;
+    console.log({ url, appId: appId ? 'PRESENT' : 'MISSING', appSecret: appSecret ? 'PRESENT' : 'MISSING', apiVersion: '2023-08-01' });
+    const response = await fetch(url, {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json',
             'x-client-id': appId,
-            'x-client-secret': appSecret
+            'x-client-secret': appSecret,
+            'x-api-version': '2023-08-01'
         },
         body: JSON.stringify(payload)
     });
@@ -206,27 +223,59 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
         });
     }
 
-    if (payment.status !== 'created') {
-        return res.status(400).json({
-            error: 'Payment session cannot be verified',
-            status: payment.status
+    // Call Cashfree to check order status before marking payment as paid
+    try {
+        const cfBase = getCashfreeApiBaseUrl();
+        const cfUrl = `${cfBase}/orders/${encodeURIComponent(orderId)}`;
+        const { appId: cfAppId, appSecret: cfAppSecret } = getCashfreeCredentials();
+        console.log({ url: cfUrl, appId: cfAppId ? 'PRESENT' : 'MISSING', appSecret: cfAppSecret ? 'PRESENT' : 'MISSING', apiVersion: '2023-08-01' });
+        const cfResp = await fetch(cfUrl, {
+            method: 'GET',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-client-id': cfAppId,
+                'x-client-secret': cfAppSecret,
+                'x-api-version': '2023-08-01'
+            }
         });
+
+        const cfBody = await cfResp.json();
+        if (!cfResp.ok) {
+            return res.status(502).json({ error: 'Failed to verify order with Cashfree', details: cfBody });
+        }
+
+        const cfStatus = cfBody.order_status || cfBody.orderStatus || cfBody.status;
+        if (cfStatus === 'PAID' || cfStatus === 'paid') {
+            if (payment.status !== 'created') {
+                return res.status(400).json({ error: 'Payment session cannot be verified', status: payment.status });
+            }
+
+            payment.status = 'paided';
+            payment.verificationDetails = {
+                verifiedAt: new Date(),
+                method: 'cashfree_order_check',
+                cashfree: cfBody
+            };
+            await payment.save();
+            return res.status(200).json({ paymentId: payment.paymentId, paymentSessionId: payment.paymentSessionId, cashfreeOrderId: payment.cashfreeOrderId, status: payment.status });
+        }
+
+        // Map other statuses to clear errors
+        if (cfStatus === 'ACTIVE') {
+            return res.status(400).json({ error: 'ORDER_ACTIVE', status: cfStatus, details: 'Order is created but not paid yet' });
+        }
+        if (cfStatus === 'EXPIRED') {
+            return res.status(400).json({ error: 'ORDER_EXPIRED', status: cfStatus });
+        }
+        if (cfStatus === 'FAILED') {
+            return res.status(400).json({ error: 'ORDER_FAILED', status: cfStatus });
+        }
+
+        return res.status(400).json({ error: 'ORDER_NOT_PAID', status: cfStatus });
+    } catch (err) {
+        console.error('[PAYMENT] Error while verifying with Cashfree:', err);
+        return res.status(500).json({ error: 'Internal verification error', details: err.message });
     }
-
-    payment.status = 'paided';
-    payment.verificationDetails = {
-        verifiedAt: new Date(),
-        method: 'api_verify'
-    };
-
-    await payment.save();
-
-    return res.status(200).json({
-        paymentId: payment.paymentId,
-        paymentSessionId: payment.paymentSessionId,
-        cashfreeOrderId: payment.cashfreeOrderId,
-        status: payment.status
-    });
 });
 
 const createCheckoutSession = expressAsyncHandler(async (req, res) => {

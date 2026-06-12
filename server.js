@@ -64,6 +64,14 @@ OPTIONAL_ENV_VARS.forEach(v => {
     if (!process.env[v]) console.warn(`[STARTUP] Missing optional env var: ${v} — some features may be disabled`);
 });
 
+// Additional Cashfree & URL environment guidance
+const CASHFREE_REQUIRED = ['CASHFREE_APP_ID', 'CASHFREE_SECRET_KEY', 'CASHFREE_ENV', 'FRONTEND_URL', 'BACKEND_URL'];
+CASHFREE_REQUIRED.forEach(v => {
+    if (!process.env[v]) {
+        console.warn(`[STARTUP] Missing recommended env var: ${v} — Cashfree integration may not work correctly`);
+    }
+});
+
 const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || '';
 const envAllowedOrigins = rawAllowedOrigins
     .split(',')
