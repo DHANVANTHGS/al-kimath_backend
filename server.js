@@ -54,18 +54,26 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 
 
+// ── Startup environment variable validation ──────────────────────────────
+const REQUIRED_ENV_VARS = ['MONGO_URI', 'JWT_SECRET', 'PORT'];
+const OPTIONAL_ENV_VARS = ['CASHFREE_APP_ID', 'CASHFREE_APP_SECRET', 'ALLOWED_ORIGINS', 'FRONTEND_URL', 'BACKEND_URL'];
+REQUIRED_ENV_VARS.forEach(v => {
+    if (!process.env[v]) console.error(`[STARTUP] MISSING required env var: ${v}`);
+});
+OPTIONAL_ENV_VARS.forEach(v => {
+    if (!process.env[v]) console.warn(`[STARTUP] Missing optional env var: ${v} — some features may be disabled`);
+});
+
 const rawAllowedOrigins = process.env.ALLOWED_ORIGINS || '';
-console.log(rawAllowedOrigins);
 const envAllowedOrigins = rawAllowedOrigins
     .split(',')
     .map(origin => origin.trim().replace(/\/$/, ''))
     .filter(Boolean);
 const allowedOrigins = envAllowedOrigins;
-console.log('Environment Allowed Origins:',allowedOrigins);
+console.log('[STARTUP] Allowed Origins from env:', allowedOrigins);
 if (!envAllowedOrigins.length) {
-    console.warn('ALLOWED_ORIGINS is not set or empty; using default allowed origins.');
+    console.warn('[STARTUP] ALLOWED_ORIGINS not set — using built-in fallback list.');
 }
-console.log('Allowed Origins:', allowedOrigins);
 
 app.use(require('cors')({
     origin: function (origin, callback) {
@@ -78,16 +86,18 @@ app.use(require('cors')({
             return callback(null, true);
         }
         
-        // Fallback: allow localhost, vercel.app and harshithaenterpries.com subdomains
+        // Fallback: allow localhost, alhikmath.com, vercel.app and harshithaenterpries.com subdomains
         if (
             sanitizedOrigin.startsWith('http://localhost:') || 
             sanitizedOrigin.startsWith('https://localhost:') ||
+            /https?:\/\/([a-z0-9-]+\.)?alhikmath\.com$/i.test(sanitizedOrigin) ||
             /https?:\/\/([a-z0-9-]+\.)?harshithaenterpries\.com$/i.test(sanitizedOrigin) ||
             /https?:\/\/([a-z0-9-]+\.)?vercel\.app$/i.test(sanitizedOrigin)
         ) {
             return callback(null, true);
         }
         
+        console.warn('[CORS] Blocked origin:', sanitizedOrigin);
         return callback(new Error('Not allowed by CORS'));
     },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
@@ -95,7 +105,7 @@ app.use(require('cors')({
     credentials: true
 }));
 
-connectdb();
+// Note: connectDB is called once above via connectDB().then(seedAdmins)
 
 app.use((req, res, next) => {
     console.log(`Got request at ${req.url} with method ${req.method} from ${req.ip}`);

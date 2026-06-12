@@ -17,6 +17,12 @@ const createOrder = expressAsyncHandler(async (req, res) => {
         paymentSessionId
     } = req.body;
 
+    console.log('[ORDER] createOrder called by', req.user?.id, 'payload:', JSON.stringify({
+        orderId, customerId, customerName, customerEmail,
+        productsCount: Array.isArray(products) ? products.length : 0,
+        total, paymentMethod, paymentSessionId
+    }));
+
     if (!customerName || !customerEmail || !products || !total || !shippingAddress) {
         return res.status(400).json({
             error: 'Invalid request parameters',
@@ -50,9 +56,17 @@ const createOrder = expressAsyncHandler(async (req, res) => {
             if (mongoose.Types.ObjectId.isValid(p.productId)) {
                 validProducts.push(p);
             } else {
-                console.warn(`Skipping invalid productId: ${p.productId}`);
+                console.warn(`[ORDER] Skipping invalid productId: ${p.productId}`);
             }
         }
+    }
+
+    if (validProducts.length === 0) {
+        console.error('[ORDER] No valid products found in request. Raw products:', JSON.stringify(products));
+        return res.status(400).json({
+            error: 'No valid products in order',
+            details: 'All productId values must be valid MongoDB ObjectIds. Check that cart items have _id values from the backend.'
+        });
     }
 
     const createdOrder = await Order.create({

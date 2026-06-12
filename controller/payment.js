@@ -40,8 +40,11 @@ const processPayment = expressAsyncHandler(async (req, res) => {
     const baseUrl = process.env.CASHFREE_API_BASE_URL || "https://api.cashfree.com/pg";
 
     if (!appId || !appSecret) {
-        console.error("Cashfree credentials not configured on backend");
-        return res.status(500).json({ error: 'Cashfree credentials not configured on backend' });
+        console.error('[PAYMENT] Cashfree credentials not configured. Set CASHFREE_APP_ID and CASHFREE_APP_SECRET in Render environment variables.');
+        return res.status(503).json({ 
+            error: 'Payment gateway not configured',
+            details: 'CASHFREE_APP_ID and CASHFREE_APP_SECRET must be set in the server environment. Contact the administrator.'
+        });
     }
 
     const frontendUrl = process.env.FRONTEND_URL || "http://localhost:3000";
@@ -149,8 +152,11 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
     const baseUrl = process.env.CASHFREE_API_BASE_URL || "https://api.cashfree.com/pg";
 
     if (!appId || !appSecret) {
-        console.error("Cashfree credentials not configured on backend");
-        return res.status(500).json({ error: 'Cashfree credentials not configured on backend' });
+        console.error('[PAYMENT] Cashfree credentials not configured. Set CASHFREE_APP_ID and CASHFREE_APP_SECRET in Render environment variables.');
+        return res.status(503).json({ 
+            error: 'Payment gateway not configured',
+            details: 'CASHFREE_APP_ID and CASHFREE_APP_SECRET must be set in the server environment. Contact the administrator.'
+        });
     }
 
     try {
