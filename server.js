@@ -12,6 +12,7 @@ const payment = require('./router/payment');
 const rateLimit = require('express-rate-limit');
 const connectDB = require('./config');
 const wishlist = require('./router/wishlist');
+const settings = require('./router/settings');
 
 // Admin routes
 const admin_products = require('./admin_router/products');
@@ -121,6 +122,7 @@ app.get('/health',(req,res)=>{
 app.use('/api/wishlist',wishlist);
 app.use('/api/payment',payment);
 app.use('/api/review',review);
+app.use('/api/settings',settings);
 
 
 // Admin API Routes
@@ -138,7 +140,11 @@ app.use('/api/admin', admin_auth_routes);
 
 app.use((err, req, res, next) => {
     console.error('Error:', err);
-    res.status(500).json({ message: 'Internal Server Error' });
+    res.status(500).json({ 
+        message: 'Internal Server Error',
+        error: err.message,
+        stack: err.stack
+    });
 });
 
 const server = app.listen(port, () => {
