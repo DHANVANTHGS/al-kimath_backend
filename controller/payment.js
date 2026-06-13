@@ -281,6 +281,8 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
 const createCheckoutSession = expressAsyncHandler(async (req, res) => {
     const { orderId } = req.body;
 
+    console.log('[PAYMENT] createCheckoutSession called', { orderId });
+
     if (!orderId) {
         return res.status(400).json({
             error: 'Invalid request parameters',
@@ -306,6 +308,13 @@ const createCheckoutSession = expressAsyncHandler(async (req, res) => {
         customer_phone: payment.phone,
         customer_name: payment.customerName
     };
+
+    console.log('[PAYMENT] checkout payload', {
+        payment_session_id: payment.cashfreePaymentSessionId,
+        orderId: payment.merchantOrderId,
+        amount: payment.amount,
+        currency: payment.currency
+    });
 
     const checkoutResponse = await createCashfreeCheckoutSession({
         orderId: payment.merchantOrderId,
