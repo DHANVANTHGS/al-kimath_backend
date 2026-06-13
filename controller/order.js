@@ -1,5 +1,6 @@
 const Order = require('../models/order');
 const Payment = require('../models/payment');
+const { deductStock } = require('../utils/stockManager');
 const expressAsyncHandler = require('express-async-handler');
 const mongoose = require('mongoose');
 
@@ -100,6 +101,12 @@ const createOrder = expressAsyncHandler(async (req, res) => {
         paymentMethod: paymentMethod || 'card',
         shippingAddress
     });
+
+    // COD orders are confirmed immediately — deduct stock right away.
+    // Online payment orders stay "pending" and stock is deducted in verifyPayment/webhook.
+    if (paymentMethod === 'cod') {
+        await deductStock(validProducts);
+    }
 
     return res.status(201).json(createdOrder);
 });

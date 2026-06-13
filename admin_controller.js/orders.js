@@ -1,4 +1,5 @@
 const Order = require('../models/order');
+const { restoreStock } = require('../utils/stockManager');
 const expressAsyncHandler = require('express-async-handler');
 
 // Get all orders with optional filters
@@ -85,10 +86,20 @@ const updateOrderStatus = expressAsyncHandler(async (req, res) => {
         return res.status(400).json({ error: 'Invalid status', validStatuses });
     }
 
-    const order = await Order.findByIdAndUpdate(id, { status }, { returnDocument: 'after' });
+    // Fetch first so we have the previous status and the products list
+    const order = await Order.findById(id);
 
     if (!order) {
         return res.status(404).json({ error: 'Order not found' });
+    }
+
+    const previousStatus = order.status;
+    order.status = status;
+    await order.save();
+
+    // Restore stock when an order transitions to cancelled
+    if (status === 'cancelled' && previousStatus !== 'cancelled') {
+        await restoreStock(order.products);
     }
 
     res.status(200).json(order);

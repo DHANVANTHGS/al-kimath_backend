@@ -1,5 +1,6 @@
 const Payment = require('../models/payment');
 const Order = require('../models/order');
+const { deductStock } = require('../utils/stockManager');
 const expressAsyncHandler = require('express-async-handler');
 const crypto = require('crypto');
 const mongoose = require('mongoose');
@@ -100,6 +101,8 @@ const createOrderFromPayment = async (payment) => {
             existing.status = 'confirmed';
             existing.paymentId = payment.paymentId;
             await existing.save();
+            // Payment confirmed — deduct stock for the now-confirmed order
+            await deductStock(existing.products);
             console.log('[PAYMENT] Existing pending order confirmed:', existing.id);
         }
         return existing;
@@ -137,6 +140,9 @@ const createOrderFromPayment = async (payment) => {
         paymentMethod: paymentMethod || 'card',
         shippingAddress
     });
+
+    // Payment confirmed — deduct stock for the newly created order
+    await deductStock(validProducts);
 
     console.log('[PAYMENT] Order created after payment confirmation:', order.id);
     return order;
