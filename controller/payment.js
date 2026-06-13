@@ -1,6 +1,8 @@
 const Payment = require('../models/payment');
+const Order = require('../models/order');
 const expressAsyncHandler = require('express-async-handler');
 const crypto = require('crypto');
+const mongoose = require('mongoose');
 
 const generateUniqueId = (prefix) => `${prefix}-${Date.now()}-${Math.floor(Math.random() * 9000) + 1000}`;
 const generateSessionId = () => `CFS-${Date.now()}-${crypto.randomBytes(4).toString('hex')}`;
@@ -8,7 +10,6 @@ const generateCashfreeOrderId = () => `CFORD-${Date.now()}-${Math.floor(Math.ran
 
 const getCashfreeApiBaseUrl = () => {
     const env = (process.env.CASHFREE_ENV || 'production').trim().toLowerCase();
-    // base URL now includes the /pg segment to simplify endpoint composition
     if (env === 'test' || env === 'sandbox') {
         return 'https://sandbox.cashfree.com/pg';
     }
@@ -36,7 +37,6 @@ const createCashfreeOrder = async ({ orderId, amount, email, phone, customerName
     const frontendUrl = (process.env.FRONTEND_URL || 'https://alhikmath.com').replace(/\/$/, '');
     const backendUrl = (process.env.BACKEND_URL || 'https://al-kimath-backend.onrender.com').replace(/\/$/, '');
 
-    // Enforce HTTPS for production environment
     if (((process.env.CASHFREE_ENV || 'production').trim().toLowerCase() === 'production') && !/^https:\/\//i.test(frontendUrl)) {
         console.error('[CASHFREE] FRONTEND_URL must be HTTPS in production:', frontendUrl);
         throw new Error('Invalid FRONTEND_URL for production');
@@ -63,7 +63,7 @@ const createCashfreeOrder = async ({ orderId, amount, email, phone, customerName
     };
 
     const url = `${baseUrl}/orders`;
-    console.log('[CASHFREE] Creating order:', { url, appId: appId ? 'PRESENT' : 'MISSING', appSecret: appSecret ? 'PRESENT' : 'MISSING', apiVersion: '2023-08-01' });
+    console.log('[CASHFREE] Creating order:', { url, orderId, amount });
 
     const response = await fetch(url, {
         method: 'POST',
@@ -87,14 +87,80 @@ const createCashfreeOrder = async ({ orderId, amount, email, phone, customerName
 };
 
 /**
+ * Helper: create an Order document from a Payment record's stored orderData.
+ * Idempotent — checks for existing Order before creating.
+ * Returns the existing or newly created Order (or null on failure).
+ */
+const createOrderFromPayment = async (payment) => {
+    // Idempotency: return existing Order if already created
+    const existing = await Order.findOne({ id: payment.merchantOrderId });
+    if (existing) {
+        // If the order was pre-created as "pending" (legacy path), confirm it now
+        if (existing.status === 'pending') {
+            existing.status = 'confirmed';
+            existing.paymentId = payment.paymentId;
+            await existing.save();
+            console.log('[PAYMENT] Existing pending order confirmed:', existing.id);
+        }
+        return existing;
+    }
+
+    if (!payment.orderData || !payment.orderData.products) {
+        console.error('[PAYMENT] No orderData on payment record:', payment.paymentId);
+        return null;
+    }
+
+    const { customerId, customerEmail, products, shippingAddress, paymentMethod } = payment.orderData;
+
+    // Filter to valid MongoDB ObjectId product IDs
+    const validProducts = Array.isArray(products)
+        ? products.filter(p => mongoose.Types.ObjectId.isValid(p.productId))
+        : [];
+
+    if (validProducts.length === 0) {
+        console.error('[PAYMENT] No valid product IDs in orderData for payment:', payment.paymentId);
+        return null;
+    }
+
+    const order = await Order.create({
+        id: payment.merchantOrderId,
+        customerId: mongoose.Types.ObjectId.isValid(customerId)
+            ? new mongoose.Types.ObjectId(customerId)
+            : undefined,
+        customerName: payment.customerName,
+        customerEmail,
+        products: validProducts,
+        total: payment.amount,
+        paymentId: payment.paymentId,
+        paymentSessionId: payment.paymentSessionId,
+        status: 'confirmed',
+        paymentMethod: paymentMethod || 'card',
+        shippingAddress
+    });
+
+    console.log('[PAYMENT] Order created after payment confirmation:', order.id);
+    return order;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
  * POST /api/payment/process
  *
- * Creates a Cashfree order and saves a Payment record.
- * Returns the cashfreePaymentSessionId for the frontend SDK to call cashfree.checkout().
+ * Creates a Cashfree order and saves a Payment record (with full orderData).
+ * Does NOT create an Order document — that happens only after payment is verified.
+ *
+ * Body (required):
+ *   orderId, amount, email, phone, customerName, productInfo,
+ *   customerEmail, products[], shippingAddress, customerId (optional)
  */
 const processPayment = expressAsyncHandler(async (req, res) => {
-    const { orderId, amount, email, phone, customerName, productInfo, customerId } = req.body;
+    const {
+        orderId, amount, email, phone, customerName, productInfo,
+        customerId, customerEmail, products, shippingAddress
+    } = req.body;
 
+    // Validate all required fields including the new orderData fields
     if (!orderId || !amount || !email || !phone || !customerName || !productInfo) {
         return res.status(400).json({
             error: 'Invalid request parameters',
@@ -102,16 +168,25 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         });
     }
 
+    if (!customerEmail || !products || !shippingAddress) {
+        return res.status(400).json({
+            error: 'Invalid request parameters',
+            details: 'customerEmail, products, and shippingAddress are required for order creation'
+        });
+    }
+
+    // Idempotency: return existing session if already created for this orderId
     const existingPayment = await Payment.findOne({ merchantOrderId: orderId });
     if (existingPayment) {
-        // If already in 'created' state, return the existing session so the frontend can retry
         if (existingPayment.status === 'created') {
+            console.log('[PAYMENT] Returning existing payment session for orderId:', orderId);
             return res.status(200).json({
                 message: 'Payment session already created',
                 paymentSessionId: existingPayment.cashfreePaymentSessionId,
                 cashfreeOrderId: existingPayment.cashfreeOrderId,
                 cashfreePaymentSessionId: existingPayment.cashfreePaymentSessionId,
                 paymentId: existingPayment.paymentId,
+                merchantOrderId: existingPayment.merchantOrderId,
                 status: existingPayment.status
             });
         }
@@ -122,6 +197,7 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         });
     }
 
+    // Create the Cashfree order
     const cashfreeResponse = await createCashfreeOrder({
         orderId,
         amount,
@@ -132,6 +208,7 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         customerId
     });
 
+    // Save the Payment record including the full orderData for later Order creation
     const payment = await Payment.create({
         paymentId: generateUniqueId('PAY'),
         merchantOrderId: orderId,
@@ -143,14 +220,22 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         phone,
         customerName,
         productInfo,
+        // Store full order payload — used by verifyPayment/verifyWebhook to create Order
+        orderData: {
+            customerId: customerId || null,
+            customerEmail,
+            products,
+            shippingAddress,
+            paymentMethod: 'card'
+        },
         status: 'created'
     });
 
-    console.log('[PAYMENT] Order created. cashfreePaymentSessionId:', payment.cashfreePaymentSessionId);
+    console.log('[PAYMENT] Payment record created:', payment.paymentId, 'for orderId:', orderId);
 
-    // Return the cashfreePaymentSessionId directly — the frontend SDK uses it with cashfree.checkout()
+    // Return the cashfreePaymentSessionId — the frontend SDK uses it with cashfree.checkout()
     return res.status(201).json({
-        paymentSessionId: payment.cashfreePaymentSessionId,   // key field for frontend SDK
+        paymentSessionId: payment.cashfreePaymentSessionId,
         cashfreeOrderId: payment.cashfreeOrderId,
         cashfreePaymentSessionId: payment.cashfreePaymentSessionId,
         paymentId: payment.paymentId,
@@ -160,11 +245,17 @@ const processPayment = expressAsyncHandler(async (req, res) => {
     });
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * POST /api/payment/verify
  *
- * Verifies a payment by checking the Cashfree order status.
- * Idempotent: if the payment is already marked "paid", returns 200 immediately.
+ * Verifies payment with Cashfree. On success:
+ *   1. Marks Payment.status = "paid"
+ *   2. Creates the Order document (status: "confirmed") using Payment.orderData
+ *   3. Returns the order to the frontend
+ *
+ * Idempotent: if Payment is already "paid"/"used", returns the existing Order immediately.
  */
 const verifyPayment = expressAsyncHandler(async (req, res) => {
     const { orderId, paymentSessionId } = req.body;
@@ -177,7 +268,8 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
     }
 
     const isPlaceholderSessionId = (sessionId) => {
-        return typeof sessionId === 'string' && /^(?:\{?payment[_-]?session[_-]?id\}?|\{paymentSessionId\})$/i.test(sessionId.trim());
+        return typeof sessionId === 'string' &&
+            /^(?:\{?payment[_-]?session[_-]?id\}?|\{paymentSessionId\})$/i.test(sessionId.trim());
     };
 
     let payment = null;
@@ -202,24 +294,26 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
         });
     }
 
-    // ── BUG FIX #1: Idempotent re-verification ──────────────────────────────
-    // If already marked as paid (e.g. by a prior verify call or webhook), return success immediately.
+    // Idempotent re-verification: already paid → return existing order
     if (payment.status === 'paid' || payment.status === 'used') {
+        const existingOrder = await Order.findOne({ id: payment.merchantOrderId });
         return res.status(200).json({
             paymentId: payment.paymentId,
             paymentSessionId: payment.paymentSessionId,
             cashfreeOrderId: payment.cashfreeOrderId,
-            status: payment.status
+            status: payment.status,
+            orderId: payment.merchantOrderId,
+            order: existingOrder || null
         });
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // Call Cashfree to check order status before marking payment as paid
+    // Fetch Cashfree order status
     try {
         const cfBase = getCashfreeApiBaseUrl();
         const cfUrl = `${cfBase}/orders/${encodeURIComponent(orderId)}`;
         const { appId: cfAppId, appSecret: cfAppSecret } = getCashfreeCredentials();
-        console.log('[CASHFREE] Verifying order status:', { url: cfUrl, appId: cfAppId ? 'PRESENT' : 'MISSING', appSecret: cfAppSecret ? 'PRESENT' : 'MISSING' });
+
+        console.log('[CASHFREE] Verifying order:', cfUrl);
 
         const cfResp = await fetch(cfUrl, {
             method: 'GET',
@@ -237,19 +331,10 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
         }
 
         const cfStatus = cfBody.order_status || cfBody.orderStatus || cfBody.status;
+        console.log('[CASHFREE] Order status for', orderId, ':', cfStatus);
 
         if (cfStatus === 'PAID' || cfStatus === 'paid') {
-            if (payment.status !== 'created') {
-                // Already processed via another path — return success (idempotent)
-                return res.status(200).json({
-                    paymentId: payment.paymentId,
-                    paymentSessionId: payment.paymentSessionId,
-                    cashfreeOrderId: payment.cashfreeOrderId,
-                    status: payment.status
-                });
-            }
-
-            // ── BUG FIX #2: Use correct status value "paid" (not "paided") ──
+            // Mark payment as paid
             payment.status = 'paid';
             payment.verificationDetails = {
                 verifiedAt: new Date(),
@@ -258,17 +343,23 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
             };
             await payment.save();
 
+            // ── Create the Order now that payment is confirmed ────────────────
+            const order = await createOrderFromPayment(payment);
+            // ─────────────────────────────────────────────────────────────────
+
             return res.status(200).json({
                 paymentId: payment.paymentId,
                 paymentSessionId: payment.paymentSessionId,
                 cashfreeOrderId: payment.cashfreeOrderId,
-                status: payment.status
+                status: payment.status,
+                orderId: payment.merchantOrderId,
+                order   // returned to frontend for confirmation page
             });
         }
 
-        // Map other statuses to clear errors
+        // Map non-PAID statuses to clear client errors
         if (cfStatus === 'ACTIVE') {
-            return res.status(400).json({ error: 'ORDER_ACTIVE', status: cfStatus, details: 'Order is created but not paid yet' });
+            return res.status(400).json({ error: 'ORDER_ACTIVE', status: cfStatus, details: 'Order created but not paid yet' });
         }
         if (cfStatus === 'EXPIRED') {
             return res.status(400).json({ error: 'ORDER_EXPIRED', status: cfStatus });
@@ -278,54 +369,50 @@ const verifyPayment = expressAsyncHandler(async (req, res) => {
         }
 
         return res.status(400).json({ error: 'ORDER_NOT_PAID', status: cfStatus });
+
     } catch (err) {
         console.error('[PAYMENT] Error while verifying with Cashfree:', err);
         return res.status(500).json({ error: 'Internal verification error', details: err.message });
     }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+
 /**
  * POST /api/payment/webhook
  *
- * Handles Cashfree webhook events.
+ * Handles async Cashfree webhook events.
+ * On PAYMENT_SUCCESS: marks Payment as "paid" and creates the Order.
  *
- * Cashfree signature spec (v2023-08-01):
- *   - Header: x-webhook-signature  (base64 HMAC-SHA256)
- *   - Header: x-webhook-timestamp  (Unix timestamp string)
- *   - Message: `{timestamp}.{rawBody}`
- *   - Secret: CASHFREE_WEBHOOK_SECRET
+ * Signature spec (Cashfree v2023-08-01):
+ *   Header: x-webhook-signature (base64 HMAC-SHA256)
+ *   Header: x-webhook-timestamp (Unix timestamp)
+ *   Message: `${timestamp}.${rawBody}`
  *
- * IMPORTANT: server.js must use express.raw() for this route so we receive
- * the unmodified raw body needed for signature verification.
+ * IMPORTANT: server.js uses express.raw() for this route so req.body is a Buffer.
  */
 const verifyWebhook = expressAsyncHandler(async (req, res) => {
-    // ── BUG FIX #4: Correct webhook signature algorithm ─────────────────────
     const signature = req.headers['x-webhook-signature'];
     const timestamp = req.headers['x-webhook-timestamp'];
     const secret = process.env.CASHFREE_WEBHOOK_SECRET || '';
 
     if (!signature || !timestamp || !secret) {
-        console.warn('[WEBHOOK] Missing signature, timestamp, or secret');
+        console.warn('[WEBHOOK] Missing signature, timestamp, or webhook secret');
         return res.status(403).json({ error: 'Webhook signature verification failed' });
     }
 
-    // req.body is the raw Buffer (express.raw middleware in server.js)
     const rawBody = Buffer.isBuffer(req.body) ? req.body.toString('utf8') : JSON.stringify(req.body);
 
-    // Build the message: timestamp + "." + rawBody
-    const signatureMessage = `${timestamp}.${rawBody}`;
     const expectedSignature = crypto
         .createHmac('sha256', secret)
-        .update(signatureMessage)
+        .update(`${timestamp}.${rawBody}`)
         .digest('base64');
 
     if (expectedSignature !== signature) {
-        console.error('[WEBHOOK] Invalid signature. Expected:', expectedSignature, 'Got:', signature);
+        console.error('[WEBHOOK] Invalid signature');
         return res.status(403).json({ error: 'Invalid webhook signature' });
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
-    // Parse body (it may be a raw buffer or already parsed JSON)
     let body;
     try {
         body = Buffer.isBuffer(req.body) ? JSON.parse(rawBody) : req.body;
@@ -335,19 +422,19 @@ const verifyWebhook = expressAsyncHandler(async (req, res) => {
     }
 
     const { event, data } = body;
-    console.log('[WEBHOOK] Received event:', event, 'data:', JSON.stringify(data));
+    console.log('[WEBHOOK] Received event:', event);
 
     const payment = await Payment.findOne({
         $or: [
-            { paymentSessionId: data?.paymentSessionId },
-            { cashfreeOrderId: data?.cashfreeOrderId },
-            { merchantOrderId: data?.orderId || data?.order?.order_id }
+            { cashfreePaymentSessionId: data?.payment_session_id },
+            { cashfreeOrderId: data?.order?.cf_order_id },
+            { merchantOrderId: data?.order?.order_id }
         ]
     });
 
     if (!payment) {
-        console.warn('[WEBHOOK] No matching payment record found for event data:', data);
-        // Return 200 to prevent Cashfree from retrying (we just don't process it)
+        console.warn('[WEBHOOK] No matching payment record for event:', event, 'data.order.order_id:', data?.order?.order_id);
+        // Return 200 so Cashfree doesn't keep retrying
         return res.status(200).json({ success: true, note: 'Payment record not found, acknowledged' });
     }
 
@@ -355,17 +442,24 @@ const verifyWebhook = expressAsyncHandler(async (req, res) => {
     payment.webhookEvents.push({ event, data, receivedAt: new Date() });
     payment.webhookStatus = event;
 
-    // ── BUG FIX #2: Use correct status "paid" (not "paided") ────────────────
     if (event === 'PAYMENT_SUCCESS' && payment.status === 'created') {
         payment.status = 'paid';
         payment.verificationDetails = {
             verifiedAt: new Date(),
             method: 'webhook'
         };
-    }
-    // ─────────────────────────────────────────────────────────────────────────
+        await payment.save();
 
-    await payment.save();
+        // ── Create the Order now that webhook has confirmed payment ──────────
+        const order = await createOrderFromPayment(payment);
+        if (order) {
+            console.log('[WEBHOOK] Order confirmed via webhook:', order.id);
+        }
+        // ─────────────────────────────────────────────────────────────────────
+    } else {
+        await payment.save();
+    }
+
     return res.status(200).json({ success: true });
 });
 

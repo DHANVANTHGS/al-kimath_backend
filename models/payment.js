@@ -49,6 +49,15 @@ const paymentSchema = new mongoose.Schema({
         type: mongoose.Schema.Types.Mixed,
         required: true
     },
+    // Full order payload stored at processPayment time.
+    // Used by verifyPayment / verifyWebhook to create the Order after payment confirms.
+    orderData: {
+        customerId: { type: String, default: null },
+        customerEmail: { type: String },
+        products: { type: mongoose.Schema.Types.Mixed },
+        shippingAddress: { type: String },
+        paymentMethod: { type: String, default: 'card' }
+    },
     status: {
         type: String,
         enum: ['created', 'paid', 'used', 'failed'],

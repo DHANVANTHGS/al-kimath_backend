@@ -1,6 +1,7 @@
 const Order = require('../models/order');
 const Payment = require('../models/payment');
 const expressAsyncHandler = require('express-async-handler');
+const mongoose = require('mongoose');
 
 const generateOrderId = () => `ORD-${Date.now()}-${Math.floor(Math.random() * 9000) + 1000}`;
 
@@ -30,6 +31,16 @@ const createOrder = expressAsyncHandler(async (req, res) => {
         });
     }
 
+    // ── FIX C: Idempotency — return existing order if same orderId submitted twice ──
+    if (orderId) {
+        const existing = await Order.findOne({ id: orderId });
+        if (existing) {
+            console.warn('[ORDER] Duplicate createOrder call for orderId:', orderId, '— returning existing');
+            return res.status(200).json(existing);
+        }
+    }
+    // ─────────────────────────────────────────────────────────────────────────────
+
     let payment = null;
     if (paymentSessionId) {
         payment = await Payment.findOne({ paymentSessionId });
@@ -38,18 +49,19 @@ const createOrder = expressAsyncHandler(async (req, res) => {
             return res.status(404).json({ error: 'Payment session not found' });
         }
 
-        if (payment.status !== 'paided') {
+        // ── FIX A: Corrected typo "paided" → "paid" ─────────────────────────
+        if (payment.status !== 'paid') {
             return res.status(400).json({
                 error: 'Payment session is not eligible for order placement',
                 status: payment.status
             });
         }
+        // ─────────────────────────────────────────────────────────────────────
 
         payment.status = 'used';
         await payment.save();
     }
 
-    const mongoose = require('mongoose');
     const validProducts = [];
     if (Array.isArray(products)) {
         for (const p of products) {
@@ -65,20 +77,26 @@ const createOrder = expressAsyncHandler(async (req, res) => {
         console.error('[ORDER] No valid products found in request. Raw products:', JSON.stringify(products));
         return res.status(400).json({
             error: 'No valid products in order',
-            details: 'All productId values must be valid MongoDB ObjectIds. Check that cart items have _id values from the backend.'
+            details: 'All productId values must be valid MongoDB ObjectIds.'
         });
     }
 
     const createdOrder = await Order.create({
         id: orderId || generateOrderId(),
-        customerId: mongoose.Types.ObjectId.isValid(customerId) ? customerId : (req.user?.id || undefined),
+        customerId: mongoose.Types.ObjectId.isValid(customerId)
+            ? new mongoose.Types.ObjectId(customerId)
+            : (req.user?.id && mongoose.Types.ObjectId.isValid(req.user.id)
+                ? new mongoose.Types.ObjectId(req.user.id)
+                : undefined),
         customerName,
         customerEmail,
         products: validProducts,
         total,
         paymentId: payment?.paymentId,
         paymentSessionId: paymentSessionId || undefined,
-        status: 'pending',
+        // ── FIX B: Auto-confirm COD; online orders stay "pending" until verifyPayment ──
+        status: paymentMethod === 'cod' ? 'confirmed' : 'pending',
+        // ─────────────────────────────────────────────────────────────────────
         paymentMethod: paymentMethod || 'card',
         shippingAddress
     });
@@ -94,7 +112,11 @@ const getOrders = expressAsyncHandler(async (req, res) => {
 
     const filter = {};
     if (req.user) {
-        filter.customerId = req.user.id;
+        // ── FIX D: Cast customerId to ObjectId for correct MongoDB comparison ──
+        filter.customerId = mongoose.Types.ObjectId.isValid(req.user.id)
+            ? new mongoose.Types.ObjectId(req.user.id)
+            : req.user.id;
+        // ─────────────────────────────────────────────────────────────────────
     }
 
     const orders = await Order.find(filter)
