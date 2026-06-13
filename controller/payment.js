@@ -176,6 +176,30 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         status: 'created'
     });
 
+    let checkoutResponse = null;
+    if (payment.cashfreePaymentSessionId) {
+        try {
+            const customer_details = {
+                customer_id: payment.email || `cust_${Date.now()}`,
+                customer_email: payment.email,
+                customer_phone: payment.phone,
+                customer_name: payment.customerName
+            };
+
+            console.log('[PAYMENT] creating checkout session for order', payment.merchantOrderId, 'payment_session_id', payment.cashfreePaymentSessionId);
+            checkoutResponse = await createCashfreeCheckoutSession({
+                orderId: payment.merchantOrderId,
+                amount: payment.amount,
+                currency: payment.currency,
+                customer_details,
+                payment_session_id: payment.cashfreePaymentSessionId
+            });
+        } catch (checkoutError) {
+            console.error('[PAYMENT] checkout session creation failed', checkoutError);
+            // Return order information and let frontend decide whether to retry checkout session.
+        }
+    }
+
     return res.status(201).json({
         paymentSessionId: payment.paymentSessionId,
         cashfreeOrderId: payment.cashfreeOrderId,
@@ -183,7 +207,8 @@ const processPayment = expressAsyncHandler(async (req, res) => {
         paymentId: payment.paymentId,
         merchantOrderId: payment.merchantOrderId,
         amount: payment.amount,
-        status: payment.status
+        status: payment.status,
+        checkoutResponse
     });
 });
 
